@@ -1,11 +1,6 @@
 import { useState } from 'react'
 import './App.css'
 
-interface TraceEntry {
-  pid: number
-  page: number
-}
-
 interface SimulationResult {
   summary: {
     totalAccesses: number
@@ -28,7 +23,7 @@ interface SimulationResult {
 }
 
 function App() {
-  const [trace, setTrace] = useState<TraceEntry[]>([])
+  const [traceText, setTraceText] = useState('')
   const [frameCount, setFrameCount] = useState(4)
   const [result, setResult] = useState<SimulationResult | null>(null)
   const [loading, setLoading] = useState(false)
@@ -37,23 +32,12 @@ function App() {
 
   const handleTraceUpload = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const text = e.target.value
-    try {
-      const entries = text
-        .split('\n')
-        .filter(line => line.trim())
-        .map(line => {
-          const [pid, page] = line.trim().split(/\s+/).map(Number)
-          return { pid, page }
-        })
-      setTrace(entries)
-      setError('')
-    } catch (err) {
-      setError('Invalid trace format. Expected: pid page (one per line)')
-    }
+    setTraceText(text)
+    setError('')
   }
 
   const runSimulation = async () => {
-    if (trace.length === 0) {
+    if (traceText.trim().length === 0) {
       setError('Please enter a trace first')
       return
     }
@@ -63,22 +47,150 @@ function App() {
     setCurrentStep(0)
 
     try {
-      const response = await fetch('http://localhost:3001/api/simulate', {
+      // Call Cloud Function via HTTPS
+      const response = await fetch('https://us-central1-oslab-00.cloudfunctions.net/simulate', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ trace, frameCount })
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ 
+          trace: traceText, 
+          frameCount 
+        })
       })
 
       if (!response.ok) {
-        throw new Error('Simulation failed')
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
 
       const data = await response.json()
-      setResult(data)
-    } catch (err) {
-      setError('Failed to run simulation. Make sure backend is running on port 3001')
+      setResult(data as SimulationResult)
+      setLoading(false)
+      return
+    } catch (cloudErr: any) {
+      console.warn('Cloud Function failed, falling back to client simulation:', cloudErr?.message || cloudErr)
+    }
+
+    try {
+      const result = simulateMemory(traceText, frameCount)
+      setResult(result)
+    } catch (err: any) {
+      setError('Failed to run simulation: ' + (err.message || 'Unknown error'))
+      console.error('Simulation error:', err)
     } finally {
       setLoading(false)
+    }
+  }
+
+  // Client-side simulation logic
+  const simulateMemory = (trace: string, frameCount: number) => {
+    const lines = trace.trim().split('\n').filter(l => l.trim())
+    const frames: any[] = Array(frameCount).fill(null).map((_, i) => ({
+      frameNum: i,
+      free: true,
+      pid: -1,
+      page: -1
+    }))
+    const processes: any = {}
+    const fifoQueue: number[] = []
+    const steps: any[] = []
+    let hits = 0
+    let faults = 0
+
+    lines.forEach((line, idx) => {
+      const [pid, page] = line.split(/\s+/).map(Number)
+      
+      if (!processes[pid]) {
+        processes[pid] = {
+          pid,
+          pageTable: []
+        }
+        // Initialize page table with 32 entries
+        for (let i = 0; i < 32; i++) {
+          processes[pid].pageTable[i] = { present: false, frameNum: -1 }
+        }
+      }
+
+      const process = processes[pid]
+      const pte = process.pageTable[page]
+
+      if (!pte) {
+        console.error('Invalid page number:', page)
+        return
+      }
+
+      const stepInfo: any = {
+        step: idx,
+        pid,
+        page,
+        frameState: frames.map(f => ({ ...f })),
+        hit: false,
+        fault: false,
+        evicted: null
+      }
+
+      if (pte.present) {
+        hits++
+        stepInfo.hit = true
+        stepInfo.type = 'hit'
+        stepInfo.frame = pte.frameNum
+        stepInfo.result = `HIT: Page ${page} of Process ${pid} is in Frame ${pte.frameNum}`
+      } else {
+        faults++
+        stepInfo.fault = true
+        stepInfo.type = 'fault'
+
+        const freeFrame = frames.find(f => f.free)
+
+        if (freeFrame) {
+          freeFrame.free = false
+          freeFrame.pid = pid
+          freeFrame.page = page
+          pte.present = true
+          pte.frameNum = freeFrame.frameNum
+          fifoQueue.push(freeFrame.frameNum)
+          stepInfo.frame = freeFrame.frameNum
+          stepInfo.result = `FAULT: Page ${page} of Process ${pid} loaded into Frame ${freeFrame.frameNum}`
+        } else {
+          const evictFrameNum = fifoQueue.shift()!
+          const evictFrame = frames[evictFrameNum]
+          const evictProcess = processes[evictFrame.pid]
+
+          if (evictProcess) {
+            evictProcess.pageTable[evictFrame.page].present = false
+          }
+
+          stepInfo.evicted = {
+            frameIndex: evictFrameNum,
+            pid: evictFrame.pid,
+            page: evictFrame.page
+          }
+
+          evictFrame.pid = pid
+          evictFrame.page = page
+          pte.present = true
+          pte.frameNum = evictFrameNum
+          fifoQueue.push(evictFrameNum)
+          stepInfo.frame = evictFrameNum
+          stepInfo.result = `FAULT: Page ${page} of Process ${pid} evicted Frame ${evictFrameNum} (P${evictFrame.pid}, Page ${evictFrame.page})`
+        }
+      }
+
+      stepInfo.hitRate = ((hits / (idx + 1)) * 100).toFixed(2)
+      stepInfo.faultRate = ((faults / (idx + 1)) * 100).toFixed(2)
+      stepInfo.frames = frames.map(f => ({ ...f }))
+      steps.push(stepInfo)
+    })
+
+    return {
+      summary: {
+        totalAccesses: lines.length,
+        hits,
+        faults,
+        hitRate: ((hits / lines.length) * 100).toFixed(2),
+        faultRate: ((faults / lines.length) * 100).toFixed(2)
+      },
+      steps
     }
   }
 
@@ -100,14 +212,13 @@ function App() {
               <label>Number of Physical Frames</label>
               <div className="input-with-label">
                 <input
-                  type="range"
+                  type="number"
                   min="1"
-                  max="16"
+                  max="32"
                   value={frameCount}
                   onChange={(e) => setFrameCount(Number(e.target.value))}
-                  className="slider"
+                  className="frame-count-input"
                 />
-                <span className="frame-count-display">{frameCount}</span>
               </div>
             </div>
 
@@ -117,12 +228,12 @@ function App() {
               <textarea
                 rows={12}
                 placeholder="1 0&#10;1 1&#10;2 0&#10;1 2&#10;3 0"
-                value={trace.map(t => `${t.pid} ${t.page}`).join('\n')}
+                value={traceText}
                 onChange={handleTraceUpload}
                 className="trace-input"
               />
               <div className="trace-stats">
-                <span>{trace.length} memory accesses</span>
+                <span>{traceText.split('\n').filter(l => l.trim()).length} memory accesses</span>
               </div>
             </div>
 
@@ -175,15 +286,15 @@ function App() {
                 <div className="progress-bar">
                   <div 
                     className="progress-fill hits" 
-                    style={{ width: `${result.summary.hitRate}%` }}
+                    style={{ width: `${parseFloat(result.summary.hitRate)}%` }}
                   >
-                    {result.summary.hitRate > 10 && `${result.summary.hitRate}%`}
+                    {parseFloat(result.summary.hitRate) > 10 && `${result.summary.hitRate}%`}
                   </div>
                   <div 
                     className="progress-fill faults" 
-                    style={{ width: `${result.summary.faultRate}%` }}
+                    style={{ width: `${parseFloat(result.summary.faultRate)}%` }}
                   >
-                    {result.summary.faultRate > 10 && `${result.summary.faultRate}%`}
+                    {parseFloat(result.summary.faultRate) > 10 && `${result.summary.faultRate}%`}
                   </div>
                 </div>
               </div>
@@ -270,24 +381,28 @@ function App() {
                   <div className="frames-container">
                     <h3>Physical Memory Frames</h3>
                     <div className="frames-grid">
-                      {result.steps[currentStep].frames.map((frame, i) => (
-                        <div
-                          key={i}
-                          className={`frame-box ${frame.free ? 'free' : 'occupied'} ${
-                            frame.pid === result.steps[currentStep].pid && !frame.free ? 'current-access' : ''
-                          }`}
-                        >
-                          <div className="frame-number">Frame {i}</div>
-                          {!frame.free ? (
-                            <div className="frame-content">
-                              <div className="frame-pid">P{frame.pid}</div>
-                              <div className="frame-page">Pg{frame.page}</div>
-                            </div>
-                          ) : (
-                            <div className="frame-empty">Empty</div>
-                          )}
-                        </div>
-                      ))}
+                      {result.steps[currentStep].frames && result.steps[currentStep].frames.length > 0 ? (
+                        result.steps[currentStep].frames.map((frame, i) => (
+                          <div
+                            key={i}
+                            className={`frame-box ${frame.free ? 'free' : 'occupied'} ${
+                              frame.pid === result.steps[currentStep].pid && !frame.free ? 'current-access' : ''
+                            }`}
+                          >
+                            <div className="frame-number">Frame {i}</div>
+                            {!frame.free ? (
+                              <div className="frame-content">
+                                <div className="frame-pid">P{frame.pid}</div>
+                                <div className="frame-page">Pg{frame.page}</div>
+                              </div>
+                            ) : (
+                              <div className="frame-empty">Empty</div>
+                            )}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="error-banner">No frame data available</div>
+                      )}
                     </div>
                   </div>
                 </div>

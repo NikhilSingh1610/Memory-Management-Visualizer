@@ -109,6 +109,25 @@ body {
   margin-top: -5px;
 }
 
+/* Frame Count Input */
+.frame-count-input {
+  width: 100%;
+  padding: 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-primary);
+  font-size: 1em;
+  font-weight: 600;
+  transition: all 0.2s ease;
+}
+
+.frame-count-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
 /* Slider Input */
 .input-with-label {
   display: flex;
@@ -695,24 +714,5 @@ body {
 
   .trace-input {
     font-size: 0.9em;
-  }
-}
-
-.frame div {
-  margin-top: 5px;
-  color: #666;
-}
-
-.frame.current .frame-index {
-  color: #ff9800;
-}
-
-@media (max-width: 1024px) {
-  .container {
-    grid-template-columns: 1fr;
-  }
-
-  .stats {
-    grid-template-columns: 1fr;
   }
 }
