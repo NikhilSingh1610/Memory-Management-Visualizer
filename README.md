@@ -1,11 +1,11 @@
 🌐 OSLab – Interactive Operating System Memory Management Simulator
 <p align="center"> <img src="https://img.shields.io/badge/OS%20Concepts-Learning%20Tool-blue?style=for-the-badge"> <img src="https://img.shields.io/badge/Memory%20Management-Paging%2FSegmentation%2FVM-green?style=for-the-badge"> <img src="https://img.shields.io/badge/Hosted%20On-Web%20App-orange?style=for-the-badge"> </p> <p align="center"> <strong>A clean and intuitive web-based platform designed to help students understand paging, segmentation, virtual memory, and page replacement algorithms.</strong> </p>
-🚀 Live Demo
-👉 https://oslab-00.web.app/
+ Live Demo
+ https://oslab-00.web.app/
 
 No installation required — works on any browser.
 
-🎯 Overview
+ Overview
 
 OSLab is an educational simulator that visually demonstrates how operating systems manage memory.
 It breaks down complex OS concepts into simple animations and step-by-step visual flows.
