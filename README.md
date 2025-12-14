@@ -78,4 +78,5 @@ How segmentation translates addresses
 
 How virtual memory extends RAM using disk
 
-📌 OSLab helps visualize what textbooks can only explain with diagrams.
+ OSLab helps visualize what textbooks can only explain with diagrams.
+
